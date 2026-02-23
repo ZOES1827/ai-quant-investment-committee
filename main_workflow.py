@@ -1,4 +1,5 @@
 import os
+import concurrent.futures
 from typing import TypedDict
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, START, END
@@ -9,124 +10,187 @@ from risk_agent import run_risk_agent
 
 
 # ==========================================
-# 2. 定义全局共享状态 (State)
+# 1. 定义全局共享状态 (State)
 # ==========================================
 class TraderState(TypedDict):
     ticker: str
-    api_key:str
-    # --- 各部门收集的数据 (用于追溯) ---
+    api_key: str
+    # --- 数据与初始信号 ---
     technical_data: str
     fundamental_data: str
     news_data: str
     risk_data: str
     news_links: list
-    # --- 各部门提交的报告/信号 ---
     tech_signal: str
     fund_signal: str
     sentiment_signal: str
     risk_signal: str
+    chart_data:list
+    # --- 【新增】多轮辩论状态 ---
+    debate_history: str
+    debate_round: int
 
-    # --- 最终决策结果 ---
+    # --- 最终决策 ---
     final_decision: str
+def gather_node(state: TraderState):
+    """【并行节点】利用多线程同时唤醒 4 个部门，大幅提升速度"""
+    print(f"\n[调度中心] 正在并行唤醒四大部门对 {state['ticker']} 进行分析...")
 
+    # 使用线程池并发执行 4 个任务
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        f_tech = executor.submit(run_tech_agent, state['ticker'], state['api_key'])
+        f_fund = executor.submit(run_fund_agent, state['ticker'], state['api_key'])
+        f_sent = executor.submit(run_sentiment_agent, state['ticker'], state['api_key'])
+        f_risk = executor.submit(run_risk_agent, state['ticker'], state['api_key'])
 
-# ==========================================
-# 3. 封装节点 (Nodes)
-# ==========================================
-# LangGraph 的节点函数只需接收 state，并返回需要更新的字典字段即可，它会自动合并状态。
-def tech_node(state: TraderState):
-    return run_tech_agent(state['ticker'], state['api_key'])
+        # 等待所有线程完成并获取结果
+        res_tech = f_tech.result()
+        res_fund = f_fund.result()
+        res_sent = f_sent.result()
+        res_risk = f_risk.result()
 
-def fund_node(state: TraderState):
-    return run_fund_agent(state['ticker'], state['api_key'])
+    # 统一合并到状态中
+    return {
+        "technical_data": res_tech.get("technical_data", ""),
+        "tech_signal": res_tech.get("tech_signal", ""),
+        "chart_data": res_tech.get("chart_data", []),
+        "fundamental_data": res_fund.get("fundamental_data", ""),
+        "fund_signal": res_fund.get("fund_signal", ""),
+        "news_data": res_sent.get("news_data", ""),
+        "news_links": res_sent.get("news_links", []),
+        "sentiment_signal": res_sent.get("sentiment_signal", ""),
+        "risk_data": res_risk.get("risk_data", ""),
+        "risk_signal": res_risk.get("risk_signal", ""),
+        "debate_history": "",  # 初始化辩论历史
+        "debate_round": 0  # 初始化辩论轮次
+    }
+def debate_node(state: TraderState):
+    """【辩论节点】负责针对各部门报告进行交叉质询"""
+    round_count = state.get("debate_round", 0)
+    history = state.get("debate_history", "")
+    print(f"\n[会议室] 正在进行第 {round_count + 1} 轮多空激辩...")
 
-def sentiment_node(state: TraderState):
-    return run_sentiment_agent(state['ticker'], state['api_key'])
-
-def risk_node(state: TraderState):
-    return run_risk_agent(state['ticker'], state['api_key'])
-
-def decision_node(state: TraderState):
-    print("\n[投资委员会] 正在汇总四大部门报告，进行最终多空辩论...")
-
-    # 【新增逻辑：因为把顶部的 llm 删了，我们需要在这里临时创建一个】
-    from langchain_openai import ChatOpenAI
     llm = ChatOpenAI(
         model="deepseek-chat",
-        api_key=state['api_key'], # 【核心：使用刚刚从前端传到状态里的 key】
+        api_key=state['api_key'],
+        base_url="https://api.deepseek.com",
+        temperature=0.6  # 稍微调高温度，让辩论思维更发散和敏锐
+    )
+
+    if round_count == 0:
+        prompt = f"""
+                你现在主持一场严肃的量化投研会议。目标标的：{state['ticker']}。
+                以下是四大部门的初始独立报告：
+                【基本面】{state['fund_signal']}
+                【技术面】{state['tech_signal']}
+                【情绪面】{state['sentiment_signal']}
+                【风控面】{state['risk_signal']}
+
+                【任务】：
+                作为客观且极具批判精神的“魔鬼代言人”，请找出这四份报告中逻辑冲突或过于乐观的地方。
+                请基于数据、历史规律或宏观常识提出尖锐的质疑，开启第一轮辩论。
+                注意：不要给出最终结论，你的目标是“寻找数据漏洞”和“揭示潜在尾部风险”。
+                """
+    else:
+        prompt = f"""
+                针对标的：{state['ticker']} 的投研辩论正在进行。
+                以下是之前的辩论记录：
+                {history}
+
+                【任务】：
+                请针对上一轮的疑点，进行第 {round_count + 1} 轮的反驳。
+                要求：
+                1. 必须使用科学理性的视角，避免情绪化的主观臆断。
+                2. 探讨胜率（Probability of Success）与赔率（Risk-Reward Ratio）。
+                3. 模拟不同流派（如价值投资 vs 趋势跟踪）的严谨交锋。
+                """
+
+    response = llm.invoke(prompt)
+    new_text = f"\n\n=== 第 {round_count + 1} 轮辩论 ===\n" + response.content
+
+    return {
+        "debate_history": history + new_text,
+        "debate_round": round_count + 1
+    }
+def should_continue_debate(state: TraderState):
+    """【路由守卫】决定是否继续辩论"""
+    # 设定我们只进行 2 轮激辩，防止死循环和过度消耗 Token
+    if state.get("debate_round", 0) < 3:
+        return "continue_debate"
+    else:
+        return "make_decision"
+def decision_node(state: TraderState):
+    """【决策节点】CIO 综合所有报告和辩论历史拍板"""
+    print("\n[投资委员会] 辩论结束，CIO 正在撰写最终决议...")
+
+    llm = ChatOpenAI(
+        model="deepseek-chat",
+        api_key=state['api_key'],
         base_url="https://api.deepseek.com",
         temperature=0.3
     )
     prompt = f"""
-    你是对冲基金的首席投资官(CIO)和基金经理。现在你的桌面上放着四份来自不同部门的独立报告，目标标的为：{state['ticker']}。
+    你是对冲基金的首席投资官(CIO)。现在你要为 {state['ticker']} 做出最终决策。
 
-    【1. 基本面研究员的报告】：
-    {state.get('fund_signal', '暂无')}
-
-    【2. 技术面分析师的报告】：
-    {state.get('tech_signal', '暂无')}
-
-    【3. 市场情绪分析师的报告】：
-    {state.get('sentiment_signal', '暂无')}
-
-    【4. 首席风控官(CRO)的报告】（具有最高优先级）：
+    【核心风控红线】（具有最高优先级）：
     {state.get('risk_signal', '暂无')}
 
-    请你主持一场“多空辩论”，综合各方观点，并输出最终的交易决议。
+    【前置多轮辩论记录】：
+    {state.get('debate_history', '暂无辩论记录')}
 
     【核心决策原则】：
-    - 如果风控官亮起红灯，无论其他部门多么看好，必须一票否决（空仓/卖出）。
-    - 如果技术面和基本面冲突，请权衡短期赔率与长期胜率。
-    - 情绪面可以作为入场时机的辅助验证。
+    1. 风险第一：如果风控报告提示明确的系统性或个体尾部风险，严格执行一票否决。
+    2. 期望值思维：评估盈亏比（赔率）和确定性（胜率），寻找“安全边际”。
+    3. 综合辩论：不偏听偏信单一指标，依据多轮辩论中未被成功驳倒的核心逻辑进行决策。
 
     【输出格式要求】：
-    # 🏆 最终决议：(买入 / 卖出 / 观望)
-    # 📊 建议仓位：(0% - 100%)
-    # ⚖️ 多空辩论总结：(说明你是如何调和部门间矛盾的，采纳了谁的观点，驳回了谁的观点)
-    # 🛡️ 核心执行逻辑：(给出具体的交易指令和止损建议)
+    # 🏆 最终决议：(强力买入 / 逢低分批建仓 / 观望 / 减仓 / 清仓)
+    # 📊 建议仓位暴露：(精确到个位数的百分比，如 15%)
+    # ⚖️ 科学决策复盘：(详细说明你是如何基于“胜率与赔率”的权衡，综合基本面估值与技术面趋势，做出的理性裁决)
+    # 🛡️ 严格执行计划：(必须包含具体的入场区间、止盈目标位和硬性止损价)
     """
 
     response = llm.invoke(prompt)
     return {"final_decision": response.content}
-
-
-# ==========================================
-# 4. 构建并行计算图 (Workflow Graph)
-# ==========================================
 workflow = StateGraph(TraderState)
 
-# 添加所有节点
-workflow.add_node("tech", tech_node)
-workflow.add_node("fund", fund_node)
-workflow.add_node("sentiment", sentiment_node)
-workflow.add_node("risk", risk_node)
+# 1. 添加节点
+workflow.add_node("gather_agents", gather_node)
+workflow.add_node("debate_room", debate_node)
 workflow.add_node("decision_maker", decision_node)
 
-# 依次执行，避免数据接口冲突和 API 并发频率限制
-workflow.add_edge(START, "tech")          # 1. 起点先交给技术组
-workflow.add_edge("tech", "fund")         # 2. 技术组弄完给基本面组
-workflow.add_edge("fund", "sentiment")    # 3. 基本面组弄完给情绪组
-workflow.add_edge("sentiment", "risk")    # 4. 情绪组弄完给风控组
-workflow.add_edge("risk", "decision_maker") # 5. 最后统一交给投资委员会
-workflow.add_edge("decision_maker", END)  # 6. 做出决定，流程结束
+# 2. 定义边 (Edges)
+workflow.add_edge(START, "gather_agents")  # 起点先让四大部门并行干活
+workflow.add_edge("gather_agents", "debate_room")  # 干完活进入会议室辩论
+
+# 3. 定义条件边 (循环辩论核心)
+workflow.add_conditional_edges(
+    "debate_room",
+    should_continue_debate,
+    {
+        "continue_debate": "debate_room",  # 条件满足，继续绕回辩论室
+        "make_decision": "decision_maker"  # 条件不满足（满2轮），交给 CIO 决策
+    }
+)
+
+workflow.add_edge("decision_maker", END)  # CIO 决策完毕，流程结束
 
 # 编译成可执行应用
 app = workflow.compile()
 
 # ==========================================
-# 5. 运行完整多智能体系统
+# 4. 运行完整多智能体系统测试
 # ==========================================
 if __name__ == "__main__":
-    target_ticker = "sh.600519"  # 依然使用贵州茅台做测试
+    target_ticker = "sh.600519"
 
     print("=" * 60)
     print(f"🚀 [系统启动] 正在为 {target_ticker} 召开多智能体投资决策会议...")
     print("=" * 60)
 
-    # 传入初始状态
-    inputs = {"ticker": target_ticker}
+    # 替换成你的真实 API key 进行独立测试
+    inputs = {"ticker": target_ticker, "api_key": "sk-xxxxxx"}
 
-    # invoke 会自动执行图逻辑
     result = app.invoke(inputs)
 
     print("\n\n" + "★" * 60)

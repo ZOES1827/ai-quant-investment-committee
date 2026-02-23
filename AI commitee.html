@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 多智能体量化投研系统</title>
+    <style>
+        /* 基础样式与排版 */
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { text-align: center; color: #2c3e50; }
+
+        /* 搜索区域 */
+        .search-box { display: flex; justify-content: center; gap: 10px; margin-bottom: 30px; }
+        input[type="text"] { padding: 12px; width: 300px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; }
+        button { padding: 12px 24px; background-color: #3498db; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; transition: background 0.3s; }
+        button:hover { background-color: #2980b9; }
+        button:disabled { background-color: #95a5a6; cursor: not-allowed; }
+
+        /* 加载动画提示 */
+        #loading { text-align: center; display: none; margin-bottom: 20px; font-weight: bold; color: #e67e22; }
+
+        /* 结果展示区（默认隐藏） */
+        #results { display: none; }
+
+        /* 最终决策卡片 */
+        .decision-card { background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; border-left: 6px solid #2ecc71; }
+        .decision-card h2 { margin-top: 0; color: #27ae60; }
+        .pre-wrap { white-space: pre-wrap; font-family: inherit; line-height: 1.6; }
+
+        /* 四大部门报告网格布局 */
+        .reports-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(45%, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .report-card { background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .report-card h3 { margin-top: 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .tech-title { color: #3498db; }
+        .fund-title { color: #9b59b6; }
+        .sent-title { color: #f39c12; }
+        .risk-title { color: #e74c3c; }
+
+        /* 新闻链接区域 */
+        .news-section { background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .news-item { margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px dashed #eee; }
+        .news-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .news-title { font-weight: bold; font-size: 16px; color: #2c3e50; text-decoration: none; }
+        .news-title:hover { text-decoration: underline; color: #3498db; }
+        .news-meta { font-size: 12px; color: #7f8c8d; margin-top: 5px; }
+        .news-content { font-size: 14px; color: #555; margin-top: 8px; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+
+<div class="container">
+    <h1>🤖 AI 投研委员会分析系统</h1>
+
+    <div class="search-box">
+        <!-- 【新增这行】API Key 密码输入框 -->
+        <input type="password" id="apiKeyInput" placeholder="输入 API Key (sk-...)" style="padding: 12px; width: 200px; border: 1px solid #ccc; border-radius: 8px;" />
+
+        <input type="text" id="tickerInput" placeholder="输入股票代码 (例: sh.600519)" />
+        <button id="analyzeBtn" onclick="startAnalysis()">开始深度研报</button>
+    </div>
+
+    <div id="loading">
+        ⏳ 投研委员会正在开会，爬虫集群与大模型正在极速运转中，请耐心等待 (约需 15-30 秒)...
+    </div>
+
+    <div id="results">
+
+        <div class="decision-card">
+            <h2>🏆 投资委员会最终决议</h2>
+            <div id="finalDecision" class="pre-wrap"></div>
+            <div style="margin-top: 15px; border-top: 1px dashed #ccc; padding-top: 15px;">
+                <button id="toggleDebateBtn" onclick="toggleDebate()" style="display: none; background-color: #f39c12; padding: 8px 16px; font-size: 14px;">
+                    📜 查看三轮多空激辩记录
+                </button>
+                <div id="debateContent" class="pre-wrap" style="display: none; background: #fdfbf7; padding: 15px; border-left: 4px solid #f39c12; border-radius: 8px; margin-top: 10px;">
+                    </div>
+            </div>
+        </div>
+
+        <div class="reports-grid">
+            <div class="report-card" style="grid-column: 1 / -1;">
+                <h3 class="tech-title">📈 技术面分析部 (包含近期K线走势)</h3>
+                <div id="klineChart" style="width: 100%; height: 550px; display: none; margin-bottom: 20px;"></div>
+                <div id="techReport" class="pre-wrap"></div>
+            </div>
+            <div class="report-card">
+                <h3 class="fund-title">📊 基本面研究部</h3>
+                <div id="fundReport" class="pre-wrap"></div>
+            </div>
+            <div class="report-card">
+                <h3 class="sent-title">🌐 市场情绪与舆情部</h3>
+                <div id="sentimentReport" class="pre-wrap"></div>
+            </div>
+            <div class="report-card">
+                <h3 class="risk-title">🛡️ 首席风控官 (CRO)</h3>
+                <div id="riskReport" class="pre-wrap"></div>
+            </div>
+        </div>
+
+        <div class="news-section">
+            <h3 style="color: #34495e;">📰 定向新闻情报与溯源链接</h3>
+            <div id="newsContainer">
+                </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    async function startAnalysis() {
+        const ticker = document.getElementById('tickerInput').value.trim();
+        const apiKey = document.getElementById('apiKeyInput').value.trim(); // 【新增：获取Key】
+
+        if (!apiKey) {
+            alert("请输入 DeepSeek API Key！"); // 【新增：检查Key是否为空】
+            return;
+        }
+        if (!ticker) {
+            alert("请输入股票代码！");
+            return;
+        }
+
+
+        // 1. 切换 UI 状态为“加载中”
+        const btn = document.getElementById('analyzeBtn');
+        const loading = document.getElementById('loading');
+        const results = document.getElementById('results');
+
+        btn.disabled = true;
+        btn.innerText = "分析中...";
+        loading.style.display = "block";
+        results.style.display = "none"; // 隐藏上次的结果
+
+        try {
+            // 2. 向你的 Flask 后端发送 POST 请求
+            const response = await fetch('http://localhost:5000/api/analyze', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                // 【修改点：把 api_key 拼接到参数里发给后端】
+                body: JSON.stringify({ ticker: ticker, api_key: apiKey })
+            });
+
+            const resData = await response.json();
+
+            if (resData.status === 'success') {
+                // 3. 填充四大报告和最终决策
+                const debateText = resData.data.debate_history;
+                const debateBtn = document.getElementById('toggleDebateBtn');
+                const debateContent = document.getElementById('debateContent');
+
+                if (debateText && debateText.trim() !== '') {
+                    debateContent.innerText = debateText;
+                    debateBtn.style.display = "inline-block"; // 如果有辩论记录，显示按钮
+                    debateContent.style.display = "none";     // 默认收起状态
+                    debateBtn.innerText = "📜 查看三轮多空激辩记录"; // 重置按钮文字
+                } else {
+                    debateBtn.style.display = "none";
+                }
+                document.getElementById('finalDecision').innerText = resData.data.decision;
+                document.getElementById('techReport').innerText = resData.data.reports.technical;
+                document.getElementById('fundReport').innerText = resData.data.reports.fundamental;
+                results.style.display = "block";
+                if (resData.data.chart_data && resData.data.chart_data.length > 0) {
+                    renderKLineChart(resData.data.chart_data);
+                } else {
+                    document.getElementById('klineChart').style.display = 'none';
+                }
+                document.getElementById('sentimentReport').innerText = resData.data.reports.sentiment;
+                document.getElementById('riskReport').innerText = resData.data.reports.risk;
+
+                // 4. 动态渲染新闻链接列表
+                const newsContainer = document.getElementById('newsContainer');
+                newsContainer.innerHTML = ''; // 清空之前的新闻
+
+                if (resData.data.news_links && resData.data.news_links.length > 0) {
+                    resData.data.news_links.forEach(news => {
+                        // 创建单条新闻的 HTML 结构
+                        const newsHTML = `
+                            <div class="news-item">
+                                <a href="${news.url}" target="_blank" class="news-title">${news.title} 🔗</a>
+                                <div class="news-meta">发布时间: ${news.time}</div>
+                                <div class="news-content">${news.content}</div>
+                            </div>
+                        `;
+                        newsContainer.innerHTML += newsHTML;
+                    });
+                } else {
+                    newsContainer.innerHTML = '<p style="color:#7f8c8d;">未获取到相关的定向新闻链接。</p>';
+                }
+
+                // 显示结果区域
+                results.style.display = "block";
+            } else {
+                alert("分析失败：" + resData.message);
+            }
+
+        } catch (error) {
+            console.error("请求报错:", error);
+            alert("请求后端服务失败，请确保 python app.py 已启动！\n错误信息: " + error.message);
+        } finally {
+            // 5. 恢复按钮状态，允许进行下一次查询
+            btn.disabled = false;
+            btn.innerText = "开始深度研报";
+            loading.style.display = "none";
+        }
+    }
+    function toggleDebate() {
+        const content = document.getElementById('debateContent');
+        const btn = document.getElementById('toggleDebateBtn');
+
+        if (content.style.display === "none") {
+            content.style.display = "block";
+            btn.innerText = "收起辩论记录 🔼";
+        } else {
+            content.style.display = "none";
+            btn.innerText = "📜 查看三轮多空激辩记录 🔽";
+        }
+    }
+    // 【新增】绘制 K 线图的核心函数
+    function renderKLineChart(chartData) {
+        const chartDom = document.getElementById('klineChart');
+        chartDom.style.display = 'block'; // 让图表容器显示出来
+        const myChart = echarts.init(chartDom);
+
+        // 拆解后端传来的数据，分别放进不同的数组里
+        const categoryData = [];
+        const values = [];
+        const ma5 = [];
+        const ma20 = [];
+
+        chartData.forEach(item => {
+            categoryData.push(item.date);
+            // ECharts 要求的数据顺序是：[开盘价, 收盘价, 最低价, 最高价]
+            values.push([item.open, item.close, item.low, item.high]);
+            ma5.push(item.MA5);
+            ma20.push(item.MA20);
+        });
+
+        // ECharts 的配置项
+        const option = {
+            tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+            legend: { data: ['日K', 'MA5', 'MA20'] },
+            grid: { left: '10%', right: '10%', bottom: '15%' },
+            xAxis: {
+                type: 'category',
+                data: categoryData,
+                scale: true,
+                boundaryGap: false,
+                axisLine: { onZero: false },
+                splitLine: { show: false }
+            },
+            yAxis: { scale: true, splitArea: { show: true } },
+            // 添加底部可缩放的滚动条
+            dataZoom: [
+                { type: 'inside', start: 60, end: 100 },
+                { show: true, type: 'slider', top: '90%', start: 60, end: 100 }
+            ],
+            series: [
+                {
+                    name: '日K',
+                    type: 'candlestick',
+                    data: values,
+                    // 红色上涨，绿色下跌 (符合A股习惯)
+                    itemStyle: { color: '#ef232a', color0: '#14b143', borderColor: '#ef232a', borderColor0: '#14b143' }
+                },
+                {
+                    name: 'MA5', type: 'line', data: ma5, smooth: true, lineStyle: { opacity: 0.5 }
+                },
+                {
+                    name: 'MA20', type: 'line', data: ma20, smooth: true, lineStyle: { opacity: 0.5 }
+                }
+            ]
+        };
+        myChart.setOption(option);
+        window.addEventListener('resize', function() {
+            myChart.resize();
+        });
+    }
+</script>
+
+</body>
+</html>

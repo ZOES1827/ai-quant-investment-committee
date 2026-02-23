@@ -1,13 +1,11 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-# 导入你已经编译好的多智能体图
 from main_workflow import app as agent_app
 app = Flask(__name__)
 CORS(app)
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze_stock():
-    # 尝试获取前端传来的 JSON 数据
     data = request.get_json()
     if not data or 'ticker' not in data or 'api_key' not in data:
         return jsonify({"status": "error", "message": "缺少股票代码或 API Key"}), 400
@@ -20,13 +18,14 @@ def analyze_stock():
     try:
         inputs = {"ticker": ticker, "api_key": api_key}
         result = agent_app.invoke(inputs)
-
+        debate_history = result.get('debate_history', '未获取到辩论记录')
         # 解决隐患二：使用 .get() 安全读取，缺失时赋予默认值
         final_decision = result.get('final_decision', '未生成最终决议')
         tech_signal = result.get('tech_signal', '技术面分析失败')
         fund_signal = result.get('fund_signal', '基本面分析失败')
         sentiment_signal = result.get('sentiment_signal', '情绪面分析失败')
         risk_signal = result.get('risk_signal', '风控分析失败')
+        chart_data = result.get('chart_data', [])
 
         # 提取我们在 sentiment_agent 中新增的新闻链接列表
         news_links = result.get('news_links', [])
@@ -37,6 +36,8 @@ def analyze_stock():
             "ticker": ticker,
             "data": {
                 "decision": final_decision,
+                "debate_history":debate_history,
+                "chart_data":chart_data,
                 "reports": {
                     "technical": tech_signal,
                     "fundamental": fund_signal,
